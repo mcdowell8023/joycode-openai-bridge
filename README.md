@@ -185,6 +185,10 @@ opencode run --model joycode/GLM-5.3 "用 bash 工具执行 echo hello，然后�
 | `JOYCODE_APP_LOG` | `~/.joycode/logs/joycode-app.log` | 端口发现来源 |
 | `JOYCODE_AUTH_FILE` | `~/.joycode/auth.json` | `ptKey` 来源 |
 | `JOYCODE_SHIM_TIMEOUT_MS` | `600000` | 单请求超时 |
+| `JOYCODE_APP_PATH` | `/Applications/JoyCode.app` | 懒启动要拉起的 App |
+| `JOYCODE_SHIM_AUTOSTART` | `1` | 端口不通时是否自动拉起 JoyCode.app；`0` 关闭 |
+| `JOYCODE_SHIM_LAUNCH_WAIT_MS` | `60000` | 拉起后等新端口的超时 |
+| `JOYCODE_SHIM_LAUNCH_COOLDOWN_MS` | `30000` | 两次拉起的冷却，防崩溃循环 |
 
 ## 模型目录
 
@@ -198,7 +202,7 @@ opencode run --model joycode/GLM-5.3 "用 bash 工具执行 echo hello，然后�
 
 ## 已知限制
 
-- **依赖 JoyCode.app 常驻**。它没开机自启，`./install.sh` 会补上；关掉它 shim 会返 502，`/health` 报 proxy 不可达。
+- **JoyCode.app 会自行退出**，端口随之消失。shim 收到请求时若发现端口不通，会懒启动把它拉起来再重试（`JOYCODE_SHIM_AUTOSTART=0` 可关掉）。不是轮询，只在请求到来时动作。
 - **依赖 token 自动续期**。`ptKey` 由 JoyCode.app 自己刷新（`~/.joycode/auth.json` 的 `last_refresh`）。token 过期后重启客户端即可。
 - **MiniMax-M3 输出带 `<think>` 前缀**，需要下游自己剥。
 - **不保证长期有效**。这是利用客户端自身通道，厂商随时可能改协议或收紧策略。协议变了先看 `~/.joycode/logs/joycode-app.log` 的 `[pro-daemon]` 行。
@@ -208,7 +212,8 @@ opencode run --model joycode/GLM-5.3 "用 bash 工具执行 echo hello，然后�
 | 现象 | 查什么 |
 | --- | --- |
 | `/health` 报 `proxy: null` | JoyCode.app 没在跑，或日志里没有 `pro responses proxy ready` |
-| `502 joycode_proxy_failed` | 端口变了但日志没刷新（客户端卡住），重启 JoyCode.app |
+| `/health` 返回 `proxyListening: false` 且 503 | 端口已失效；发一次请求即触发懒启动 |
+| `502 joycode_proxy_failed` | 懒启动被 `JOYCODE_SHIM_AUTOSTART=0` 关掉，或拉起后 60s 内仍无新端口 |
 | `401 账号未登录` | 请求没带 `ptKey` 头，或 token 过期 |
 | `AI_GRAY_ACCESS_DENIED` | 走了 `/responses` 且 `stream: false` |
 | `请求模型不在当前 JoyCode 模型目录中` | 模型名不是 slug，且不带 `-agent` |

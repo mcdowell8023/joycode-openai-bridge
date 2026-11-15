@@ -34,10 +34,16 @@
  *   JOYCODE_APP_LOG          default ~/.joycode/logs/joycode-app.log
  *   JOYCODE_AUTH_FILE        default ~/.joycode/auth.json
  *   JOYCODE_SHIM_TIMEOUT_MS  default 600000
+ *   JOYCODE_APP_PATH         default /Applications/JoyCode.app (relaunch target)
+ *   JOYCODE_SHIM_AUTOSTART   default 1; set 0 to disable lazy relaunch
+ *   JOYCODE_SHIM_LAUNCH_WAIT_MS     default 60000 (wait for a fresh proxy port)
+ *   JOYCODE_SHIM_LAUNCH_COOLDOWN_MS default 30000 (anti crash-loop throttle)
  */
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { connect } from "node:net";
 import path from "node:path";
 import os from "node:os";
 
@@ -48,6 +54,10 @@ const TIMEOUT_MS = Number(process.env.JOYCODE_SHIM_TIMEOUT_MS || 600000);
 const APP_LOG = process.env.JOYCODE_APP_LOG || path.join(os.homedir(), ".joycode/logs/joycode-app.log");
 const AUTH_FILE = process.env.JOYCODE_AUTH_FILE || path.join(os.homedir(), ".joycode/auth.json");
 const PINNED_PROXY = process.env.JOYCODE_PROXY_URL || "";
+const APP_PATH = process.env.JOYCODE_APP_PATH || "/Applications/JoyCode.app";
+const AUTOSTART = process.env.JOYCODE_SHIM_AUTOSTART !== "0";
+const LAUNCH_WAIT_MS = Number(process.env.JOYCODE_SHIM_LAUNCH_WAIT_MS || 60000);
+const LAUNCH_COOLDOWN_MS = Number(process.env.JOYCODE_SHIM_LAUNCH_COOLDOWN_MS || 30000);
 
 const PROXY_PATH = "/api/saas/openai/v1";
 const PROXY_LOG_RE = /pro responses proxy ready: (http:\/\/127\.0\.0\.1:\d+)/g;
@@ -62,6 +72,81 @@ const FALLBACK_MODELS = [
 ];
 
 let modelCache = { at: 0, models: FALLBACK_MODELS };
+
+/** TCP probe: is anything listening on the proxy port right now? */
+function probePort(base) {
+  let host, port;
+  try {
+    const u = new URL(base);
+    host = u.hostname;
+    port = Number(u.port || 80);
+  } catch {
+    return Promise.resolve(false);
+  }
+  return new Promise((resolve) => {
+    const sock = connect({ host, port });
+    const done = (ok) => {
+      sock.removeAllListeners();
+      sock.destroy();
+      resolve(ok);
+    };
+    sock.setTimeout(1500);
+    sock.once("connect", () => done(true));
+    sock.once("timeout", () => done(false));
+    sock.once("error", () => done(false));
+  });
+}
+
+let lastLaunchAt = 0;
+let launching = null;
+
+/**
+ * JoyCode.app exits on its own (idle/quit), taking the ephemeral proxy port with
+ * it. Rather than polling forever, relaunch it lazily on the first request that
+ * finds the port dead, then wait for a *newer* log line than the one we saw.
+ */
+async function ensureProxy() {
+  const base = await discoverProxyBase();
+  if (await probePort(base)) return base;
+  if (!AUTOSTART) throw new Error(`proxy ${base} is not listening (autostart disabled)`);
+
+  const logBefore = await readFile(APP_LOG, "utf8").catch(() => "");
+  const seenBefore = [...logBefore.matchAll(PROXY_LOG_RE)].length;
+
+  if (!launching) {
+    // Throttle: a crash-looping app must not be respawned on every request.
+    const since = Date.now() - lastLaunchAt;
+    if (since < LAUNCH_COOLDOWN_MS) {
+      throw new Error(`proxy ${base} is down and JoyCode was launched ${Math.round(since / 1000)}s ago`);
+    }
+    lastLaunchAt = Date.now();
+    console.log(`[shim] proxy ${base} not listening; launching ${APP_PATH}`);
+    launching = new Promise((resolve) => {
+      const child = spawn("/usr/bin/open", ["-g", "-a", APP_PATH], { stdio: "ignore", detached: true });
+      child.on("error", (e) => console.error(`[shim] launch failed: ${e.message}`));
+      child.on("spawn", () => child.unref());
+      resolve();
+    }).finally(() => {
+      launching = null;
+    });
+    await launching;
+  }
+
+  const deadline = Date.now() + LAUNCH_WAIT_MS;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 1000));
+    const text = await readFile(APP_LOG, "utf8").catch(() => "");
+    const hits = [...text.matchAll(PROXY_LOG_RE)];
+    if (hits.length > seenBefore) {
+      const fresh = hits[hits.length - 1][1];
+      if (await probePort(fresh)) {
+        console.log(`[shim] proxy ready at ${fresh} after relaunch`);
+        return fresh;
+      }
+    }
+  }
+  throw new Error(`JoyCode did not come back within ${LAUNCH_WAIT_MS / 1000}s`);
+}
 
 /** The proxy binds an ephemeral port on every launch; the only durable record is its log. */
 async function discoverProxyBase() {
@@ -161,7 +246,7 @@ async function handleChat(req, res, url) {
   const started = Date.now();
   let base, ptKey, models;
   try {
-    base = await discoverProxyBase();
+    base = await ensureProxy();
     ptKey = await readPtKey();
     models = await fetchModels(base, ptKey);
   } catch (e) {
@@ -286,16 +371,20 @@ const server = createServer(async (req, res) => {
   if (req.method === "GET" && (url.pathname === "/health" || url.pathname === "/")) {
     let proxy = null;
     let error = null;
+    let alive = false;
     try {
       proxy = await discoverProxyBase();
+      alive = await probePort(proxy);
       await readPtKey();
     } catch (e) {
       error = e.message;
     }
-    json(res, proxy ? 200 : 503, {
-      ok: Boolean(proxy),
+    json(res, proxy && alive ? 200 : 503, {
+      ok: Boolean(proxy) && alive,
       mode: "cli-proxy",
       proxy,
+      proxyListening: alive,
+      autostart: AUTOSTART,
       models: modelCache.models.map((m) => m.slug),
       error,
     });

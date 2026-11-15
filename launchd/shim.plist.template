@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Template. install.sh fills in the placeholders; do not load this file directly.
+  Placeholders: __LABEL__ __NODE_BIN__ __SCRIPT__ __LOG_DIR__ __PORT__ __TOKEN__
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>__LABEL__</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>__NODE_BIN__</string>
+        <string>__SCRIPT__</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>JOYCODE_SHIM_PORT</key>
+        <string>__PORT__</string>
+        <key>JOYCODE_SHIM_TOKEN</key>
+        <string>__TOKEN__</string>
+        <key>JOYCODE_SHIM_HOST</key>
+        <string>0.0.0.0</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>__LOG_DIR__/shim.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>__LOG_DIR__/shim.err.log</string>
+</dict>
+</plist>

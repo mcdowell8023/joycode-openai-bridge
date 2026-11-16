@@ -186,6 +186,49 @@ shim 一旦绑 `0.0.0.0`，跨机链路本身很简单（对端 curl 一下 `/he
 - **目录层**：从 `/v1/models` 的返回里过滤掉（否则下游仍能选到）
 - **请求层**：在模型名解析**之前**显式拒绝。⚠️ 这一步容易漏 —— 如果有「未知模型回退到第一个」的兜底逻辑，只删目录会让它静默回退成别的模型，禁用形同虚设
 
+## 步骤十：把凭据固定下来，别跟着客户端的登录态漂
+
+前九步做完，链路依赖的是「客户端当前登录的那个账号」。**这个账号会被换掉** —— 换号不一定是协议变化，但效果一样：链路当场断，而且报错文本会骗人。
+
+2026-11-16 实例：JoyCode.app 里的账号从 A 换成 B（`14:45:34 proxy stopped` → `14:45:59 login_completed` → `14:45:59 proxy ready`，端口 `55735 → 61767`），下游立刻报 `HTTP 406 {"code":401,"msg":"账号未登录"}`。看起来像 token 过期，实际是**新账号在服务端没有生成权限**。
+
+### 先分清是「链路坏了」还是「账号没权限」
+
+同一个代理端口、同一个请求体，只换 `ptKey` 头打过去：
+
+- 旧账号 token → 200 出 token
+- 新账号 token → `AI_GRAY_ACCESS_DENIED`
+
+这一步能把「链路问题」和「账号问题」彻底分开，比读日志猜快得多。判据：**只要换 token 就能改变结果，问题就在账号侧，不用再查端口/懒启动/配置。**
+
+顺带记两个路径差异（同一代理下行为不同）：
+
+| 路径 | 鉴权来源 | 缺/错 token 时 |
+| --- | --- | --- |
+| `POST /api/saas/openai/v1/chat/completions` | 请求头 `ptKey` | `{"code":401,"msg":"账号未登录"}` |
+| `POST /api/saas/openai/v1/responses` | 代理自身登录态（无视 ptKey） | 新账号直接 `AI_GRAY_ACCESS_DENIED` |
+
+⇒ **要能切账号，就必须走 chat 路径 + 自己带 `ptKey`。** 走 responses 的封装无法固定身份。
+
+### 固定身份的做法
+
+把目标账号的 token 快照落成独立文件（`tokens.access_token` / `refresh_token` / `tenant` / `userId` 必须同属一个账号，**四个字段都要改，漏一个就是半新半旧的身份**），然后让常驻服务指向它：`JOYCODE_AUTH_FILE=<快照文件>`。
+
+### 改了 plist 的 env 必须 bootout + bootstrap
+
+`launchctl kickstart -k` 只会重启进程，**不会重读 plist 里的 `EnvironmentVariables`** —— 实测重启后进程环境仍是旧的三项。必须：
+
+```bash
+launchctl bootout  gui/$(id -u)/<label>
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/<label>.plist
+```
+
+验证方式不是看 `launchctl list`，而是 `ps eww -p <pid> | tr ' ' '\n' | grep JOYCODE_AUTH_FILE`。
+
+### 代价要写进文档
+
+固定下来的凭据不再被客户端续期（客户端只维护当前登录账号）。这是有意的取舍：**用「不会自动续期」换「不会被别人换号打断」**。过期后重新登录该账号并重做快照即可。
+
 ## 判断标准：什么时候该放弃
 
 - 客户端本身也报权限错 → 放弃，这是账号问题
@@ -205,4 +248,4 @@ JoyCode 这次三条都没踩到，所以成了。
 
 ## 附：JoyCode 的具体实现
 
-见本仓库根目录 `README.md` 和 `scripts/joycode-openai-shim.mjs`。那 400 多行代码就是上面九步的落地：端口发现、token 读取、鉴权翻译、流式透传、懒启动、模型禁用。
+见本仓库根目录 `README.md` 和 `scripts/joycode-openai-shim.mjs`。那 400 多行代码就是上面十步的落地：端口发现、token 读取、鉴权翻译、流式透传、懒启动、模型禁用、凭据固定。

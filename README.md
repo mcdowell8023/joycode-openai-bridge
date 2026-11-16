@@ -210,6 +210,45 @@ opencode run --model joycode/JoyAI-Code-1.6 "用 bash 工具执行 echo hello，
 | `JOYCODE_SHIM_LAUNCH_COOLDOWN_MS` | `30000` | 两次拉起的冷却，防崩溃循环 |
 | `JOYCODE_SHIM_DISABLED_MODELS` | `GLM-5.3` | 逗号分隔、大小写不敏感；命中的模型从 `/v1/models` 隐藏且请求返 `400 model_disabled`。设空串恢复全部 |
 
+## 凭据固定（换号会打断链路）
+
+shim 每个请求都重读 `JOYCODE_AUTH_FILE` 的 `tokens.access_token` 当 `ptKey`。默认值 `~/.joycode/auth.json` 意味着「跟随 JoyCode.app 当前登录账号」。
+
+**在 JoyCode.app 里换号会立刻打断整条链路。** 2026-11-16 实例：账号从 `mcdowell1991` 换成 `zhanghong1991217`，代理进程跟着重建（端口 `55735 → 61767`），下游随即报 `HTTP 406 {"code":401,"msg":"账号未登录"}`。原因不是 token 过期，而是新账号在 chat 路径被判无权限（`AI_GRAY_ACCESS_DENIED`）—— 同一个代理、同一个端口，只换 `ptKey` 头打过去，旧账号 200 出 token、新账号被拒，就能确认是账号问题而非链路问题。
+
+诊断顺序：
+
+```bash
+# 1. 当前 auth.json 属于哪个账号（token 是 base64，解出来是 <ts>||<loginType>|<userId>|<secret>）
+python3 - <<'PY'
+import json,base64,os
+t=json.load(open(os.path.expanduser("~/.joycode/auth.json")))["tokens"]["access_token"]
+print(base64.b64decode(t+"==").decode())
+PY
+# 2. 代理端口与是否存活
+grep -o "pro responses proxy ready: http://127.0.0.1:[0-9]*" ~/.joycode/logs/joycode-app.log | tail -1
+# 3. 换号时间点
+grep -E "login_completed|login_credential_persisted|proxy ready" ~/.joycode/logs/joycode-app.log | tail -5
+```
+
+要固定身份，把目标账号的 token 快照落成独立文件，再让 LaunchAgent 指过去：
+
+```bash
+cp ~/.joycode/auth.json ~/.joycode/auth-<账号>.json
+chmod 600 ~/.joycode/auth-<账号>.json
+# 编辑：tokens.access_token / tokens.refresh_token / tenant / userId 必须同属一个账号
+```
+
+plist 的 `EnvironmentVariables` 加 `JOYCODE_AUTH_FILE` 指向该文件。改完必须 **bootout + bootstrap**（`kickstart -k` 不会重读 plist 的 env）：
+
+```bash
+launchctl bootout  gui/$(id -u)/<label>
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/<label>.plist
+tail -3 <log dir>/shim.out.log   # 应见 [shim] credential: … (pinned)
+```
+
+代价：固定文件里的 `refresh_token` 不再被 JoyCode.app 续期（app 只维护当前登录账号），过期后必须重新从该账号登录并重做快照。
+
 ## 模型目录
 
 | slug（上游） | display（可传入） | 上下文 | 计费 | 备注 |
@@ -228,6 +267,7 @@ opencode run --model joycode/JoyAI-Code-1.6 "用 bash 工具执行 echo hello，
 
 - **JoyCode.app 会自行退出**，端口随之消失。shim 收到请求时若发现端口不通，会懒启动把它拉起来再重试（`JOYCODE_SHIM_AUTOSTART=0` 可关掉）。不是轮询，只在请求到来时动作。
 - **依赖 token 自动续期**。`ptKey` 由 JoyCode.app 自己刷新（`~/.joycode/auth.json` 的 `last_refresh`）。token 过期后重启客户端即可。
+- **在 JoyCode.app 里换号会立刻打断链路**，且新账号不一定有生成权限（报 `AI_GRAY_ACCESS_DENIED`，下游表现为 `HTTP 406 账号未登录`）。要固定身份用 `JOYCODE_AUTH_FILE` 指向账号快照文件，见上面「凭据固定」。
 - **MiniMax-M3 输出带 `<think>` 前缀**，需要下游自己剥。
 - **套餐积分会耗尽**。除 `JoyAI-Code-1.6` 外的模型都扣月积分；耗尽后它们一律返 `insufficient_quota`，而 1.6 仍可用（见上面「配额耗尽判别法」）。
 - **不保证长期有效**。这是利用客户端自身通道，厂商随时可能改协议或收紧策略。协议变了先看 `~/.joycode/logs/joycode-app.log` 的 `[pro-daemon]` 行。

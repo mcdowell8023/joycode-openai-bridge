@@ -473,4 +473,7 @@ server.listen(PORT, HOST, async () => {
     console.error(`[shim] proxy not ready: ${e.message} (will retry per request)`);
   }
   console.log(`[shim] auth: ${TOKEN ? "bearer required" : "open (no token)"}`);
+  console.log(
+    `[shim] credential: ${AUTH_FILE}${process.env.JOYCODE_AUTH_FILE ? " (pinned)" : " (live JoyCode.app login)"}`,
+  );
 });

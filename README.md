@@ -170,6 +170,26 @@ opencode run --model joycode/GLM-5.3 "用 bash 工具执行 echo hello，然后�
 
 之后 `paseo run --provider opencode --model joycode/GLM-5.3` 就能用；Paseo 的 MCP 会自动把它暴露给上层 agent。
 
+### 跨机部署（一台 Mac 跑客户端，另一台机器用 Paseo 调）
+
+客户端只能跑在装了 JoyCode 且已登录的那台机器上，但 shim 监听 `0.0.0.0`，所以别的机器可以直接连过来。2026-11 在一台 Windows（wb-hub）上落地时踩到四件事，全部是 Paseo + opencode 侧的，跟 shim 无关：
+
+1. **PATH 上的 `opencode` 必须是 2.x**。npm 上的 `opencode-ai` 是 1.x 线，而 2.x 用的是另一套库 schema；两者混用时 1.x 会报 `Database is not empty and has no session table`（连 `opencode db` 只读查询都进不去）。2.x 的包名是 `@opencode/cli`：
+   ```powershell
+   npm uninstall -g opencode-ai
+   npm install -g @opencode/cli@2.3.0
+   opencode --version   # 必须是 v2.x
+   ```
+2. **`provider` 单数映射，不要用 `providers` 复数**。写进 `providers`（复数）的条目拿不到 `npm` 包，Paseo 生成的模型定义缺 package，调用时报 `Unsupported package for joycode/<model>`。joycode 必须放在 `provider` 里。
+3. **加顶层 `enabled_providers: ["joycode"]`**。Paseo 的模型目录来自它拉起的 opencode ACP server 的 `provider.list`；不加这个，`minimax-cn` 之类的凭据型 provider（`opencode auth` 存的，不在配置文件里）会排在前面，抢占默认模型。
+4. **Paseo 的「默认模型」= 模型目录第一项**。源码 `@getpaseo/server` 的 `resolveDefaultModelId` 是 `catalog.models.find(m => m.isDefault) ?? catalog.models[0]`，而 opencode provider 从不给模型设 `isDefault`，所以不指定模型时永远取列表首项。把 joycode 排到首项，新建会话就会自动落到 `joycode/*`。
+
+改完 `paseo reload`。注意 Paseo 会缓存 ACP server 的模型目录：`provider models opencode` 有时要等 ACP server 重建（或手动结束那个 `opencode` 子进程）才刷新，期间 `provider diagnostic` 可能短暂显示 `Status: Error: Transport`。
+
+已验证的最终形态（wb-hub）：`provider models opencode` 只列 5 条 joycode 模型，`opencode models` 同样 5 条，不指定模型起 agent 落到 `joycode/JoyAI-Code-1.6` 并正常出 token。
+
+跨机还有一条前提：shim 那边要能被对端访问到（Tailscale / 局域网都行），并且 `JOYCODE_SHIM_TOKEN` 不要留空。
+
 ### 其他
 
 任何认 OpenAI `/v1/chat/completions` 的工具，把 baseURL 指向 `http://<host>:18888/v1`、API key 填 `JOYCODE_SHIM_TOKEN` 即可。

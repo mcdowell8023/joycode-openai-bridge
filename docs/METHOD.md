@@ -136,6 +136,23 @@ opencode run --model <provider>/<model> "..."
 
 第 4 步特别重要：**tools 能不能通，决定了这个端点能不能给 coding agent 用**。不能出 `tool_calls` 的通道只能当聊天用。
 
+## 步骤八：跨机部署时，下游工具的配置层比 shim 更容易出错
+
+shim 一旦绑 `0.0.0.0`，跨机链路本身很简单（对端 curl 一下 `/health` 就验完）。真正耗时间的是**下游 agent 工具自己的 provider/模型目录机制**——它们对「配置文件里写了什么」和「运行时实际加载了什么」经常是两回事。
+
+以 Paseo + opencode 为例，2026-11 在一台 Windows 上落地时依次踩到四层，每层都要单独验证：
+
+| 层 | 症状 | 真因 | 判据 |
+| --- | --- | --- | --- |
+| 运行时版本 | `Database is not empty and has no session table` | PATH 上是 1.x 线（`opencode-ai`），库是 2.x schema | `opencode --version` 必须与库同代 |
+| provider 映射位置 | `Unsupported package for <provider>/<model>` | 写进了 `providers`（复数），拿不到 `npm` 包 | 条目必须在 `provider`（单数）里 |
+| 模型目录顺序 | 不指定模型时落到别的 provider | 凭据型 provider（`opencode auth` 存的）排在前面 | 加 `enabled_providers` 白名单收窄 |
+| 默认模型 | 新建会话默认模型不可用 | Paseo 取 `catalog.models[0]`，opencode 从不设 `isDefault` | 让目标 provider 成为目录首项 |
+
+关键教训：**「配置文件改了」不等于「运行时生效了」**。Paseo 会缓存 ACP server 的模型目录，改完配置要么 reload、要么等 ACP server 重建；期间 `provider diagnostic` 可能显示 `Status: Error: Transport`，不要据此判定配置失败。
+
+判断「默认模型从哪来」不要猜，去读下游工具的服务端源码：Paseo 的答案在 `@getpaseo/server/dist/server/server/agent/agent-manager.js` 的 `resolveDefaultModelId`，两行代码就说明了一切（`catalog.models.find(m => m.isDefault) ?? catalog.models[0]`）。
+
 ## 判断标准：什么时候该放弃
 
 - 客户端本身也报权限错 → 放弃，这是账号问题
@@ -155,4 +172,4 @@ JoyCode 这次三条都没踩到，所以成了。
 
 ## 附：JoyCode 的具体实现
 
-见本仓库根目录 `README.md` 和 `scripts/joycode-openai-shim.mjs`。那 328 行代码就是上面七步的落地。
+见本仓库根目录 `README.md` 和 `scripts/joycode-openai-shim.mjs`。那 400 多行代码就是上面八步的落地：端口发现、token 读取、鉴权翻译、流式透传、懒启动。

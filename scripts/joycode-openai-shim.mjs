@@ -38,6 +38,9 @@
  *   JOYCODE_SHIM_AUTOSTART   default 1; set 0 to disable lazy relaunch
  *   JOYCODE_SHIM_LAUNCH_WAIT_MS     default 60000 (wait for a fresh proxy port)
  *   JOYCODE_SHIM_LAUNCH_COOLDOWN_MS default 30000 (anti crash-loop throttle)
+ *   JOYCODE_SHIM_DISABLED_MODELS    default "GLM-5.3" (comma list, case-insensitive;
+ *                                   hidden from /v1/models and rejected with 400;
+ *                                   set to "" to re-enable everything)
  */
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
@@ -61,6 +64,32 @@ const LAUNCH_COOLDOWN_MS = Number(process.env.JOYCODE_SHIM_LAUNCH_COOLDOWN_MS ||
 
 const PROXY_PATH = "/api/saas/openai/v1";
 const PROXY_LOG_RE = /pro responses proxy ready: (http:\/\/127\.0\.0\.1:\d+)/g;
+
+/**
+ * Models hidden from the catalogue and rejected on request.
+ *
+ * Cost check (2026-11-16, quota-exhaustion method): only JoyAI-Code-1.6 is
+ * truly 0x — it keeps answering after the 10k team quota hit remain=-20, with
+ * no delta on the counter. GLM-5.3 / Kimi-K2.6 / MiniMax-M3 / Doubao-Seed-2.0-pro
+ * all burn credits, and the quota is now exhausted, so they return
+ * insufficient_quota. GLM-5.3 is additionally the most expensive of them
+ * (0.6x, ~2 credits per tiny call) — user decision 2026-11-16: disable it.
+ * Override with JOYCODE_SHIM_DISABLED_MODELS="a,b" (empty string re-enables all).
+ */
+const DISABLED_MODELS = new Set(
+  (process.env.JOYCODE_SHIM_DISABLED_MODELS ?? "GLM-5.3")
+    .split(",")
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean),
+);
+
+function isDisabled(model) {
+  if (!DISABLED_MODELS.size) return false;
+  const slug = String(model.slug || "").toLowerCase();
+  const display = String(model.display || "").toLowerCase();
+  const bare = slug.replace(/-agent$/, "");
+  return DISABLED_MODELS.has(slug) || DISABLED_MODELS.has(display) || DISABLED_MODELS.has(bare);
+}
 
 // Fallback catalogue, used only when the proxy cannot be reached at startup.
 const FALLBACK_MODELS = [
@@ -175,12 +204,14 @@ async function fetchModels(base, ptKey) {
     });
     if (!res.ok) throw new Error(`models HTTP ${res.status}`);
     const body = await res.json();
-    const models = (body.models || []).map((m) => ({
-      slug: m.slug,
-      display: m.display_name || m.slug,
-      context: m.context_window,
-      reasoning: m.supported_reasoning_levels || [],
-    }));
+    const models = (body.models || [])
+      .map((m) => ({
+        slug: m.slug,
+        display: m.display_name || m.slug,
+        context: m.context_window,
+        reasoning: m.supported_reasoning_levels || [],
+      }))
+      .filter((m) => !isDisabled(m));
     if (models.length) modelCache = { at: Date.now(), models };
   } catch (e) {
     console.error(`[shim] model catalogue refresh failed: ${e.message}`);
@@ -259,6 +290,34 @@ async function handleChat(req, res, url) {
       },
     });
     return;
+  }
+
+  // Reject explicitly-requested models that are disabled, instead of silently
+  // falling back to models[0] (resolveSlug would do that for unknown names).
+  if (body.model) {
+    const wanted = String(body.model).toLowerCase().trim();
+    const wantedBare = wanted.replace(/-agent$/, "");
+    const hit = models.find(
+      (m) =>
+        m.slug.toLowerCase() === wanted ||
+        m.display.toLowerCase() === wanted ||
+        m.slug.toLowerCase().replace(/-agent$/, "") === wantedBare,
+    );
+    const explicitlyDisabled =
+      !hit && (DISABLED_MODELS.has(wanted) || DISABLED_MODELS.has(wantedBare));
+    if (explicitlyDisabled) {
+      console.log(`[shim] 400 model=${body.model} disabled`);
+      json(res, 400, {
+        error: {
+          message: `Model "${body.model}" is disabled on this shim (JOYCODE_SHIM_DISABLED_MODELS). Available: ${models
+            .map((m) => m.display)
+            .join(", ")}`,
+          type: "invalid_request_error",
+          code: "model_disabled",
+        },
+      });
+      return;
+    }
   }
 
   const upstreamBody = { ...body, model: resolveSlug(body.model, models) };

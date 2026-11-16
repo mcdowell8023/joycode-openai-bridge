@@ -74,11 +74,11 @@ stream: true   →  正常 SSE 流
 **② 模型名必须用 `/v1/models` 返回的原始 slug**
 
 ```
-GLM-5.3        →  {"error":"请求模型不在当前 JoyCode 模型目录中"}   # 裸 display 名
-GLM-5.3-agent  →  正常
+Kimi-K2.6        →  {"error":"请求模型不在当前 JoyCode 模型目录中"}   # 裸 display 名
+Kimi-K2.6-agent  →  正常
 ```
 
-本仓库的 shim 做了双向映射，`GLM-5.3` 和 `GLM-5.3-agent` 都能传。
+本仓库的 shim 做了双向映射，`Kimi-K2.6` 和 `Kimi-K2.6-agent` 都能传。
 
 **③ 代理只绑 `127.0.0.1`**
 
@@ -99,7 +99,7 @@ curl -s -H "Authorization: Bearer your-secret" http://127.0.0.1:18888/health
 # 3. 出一次 token
 curl -s -X POST http://127.0.0.1:18888/v1/chat/completions \
   -H "Authorization: Bearer your-secret" -H "Content-Type: application/json" \
-  -d '{"model":"GLM-5.3","messages":[{"role":"user","content":"只回复两个字：可用"}]}'
+  -d '{"model":"JoyAI-Code-1.6","messages":[{"role":"user","content":"只回复两个字：可用"}]}'
 # {"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"可用"}}],...}
 ```
 
@@ -134,11 +134,10 @@ JoyCode.app 自己没有开机自启，脚本一并补上这一环（用 `open -
         "apiKey": "your-secret"
       },
       "models": {
-        "GLM-5.3": { "name": "GLM-5.3", "limit": { "context": 200000, "output": 32768 } },
+        "JoyAI-Code-1.6": { "name": "JoyAI-Code-1.6", "limit": { "context": 200000, "output": 32768 } },
         "Kimi-K2.6": { "name": "Kimi-K2.6", "limit": { "context": 200000, "output": 32768 } },
         "MiniMax-M3": { "name": "MiniMax-M3", "limit": { "context": 200000, "output": 32768 } },
-        "Doubao-Seed-2.0-pro": { "name": "Doubao-Seed-2.0-pro", "limit": { "context": 200000, "output": 32768 } },
-        "JoyAI-Code-1.6": { "name": "JoyAI-Code-1.6", "limit": { "context": 200000, "output": 32768 } }
+        "Doubao-Seed-2.0-pro": { "name": "Doubao-Seed-2.0-pro", "limit": { "context": 200000, "output": 32768 } }
       }
     }
   }
@@ -149,8 +148,8 @@ JoyCode.app 自己没有开机自启，脚本一并补上这一环（用 `open -
 
 ```bash
 opencode models | grep joycode
-opencode run --model joycode/GLM-5.3 "只回复两个字：可用"
-opencode run --model joycode/GLM-5.3 "用 bash 工具执行 echo hello，然后贴出输出"
+opencode run --model joycode/JoyAI-Code-1.6 "只回复两个字：可用"
+opencode run --model joycode/JoyAI-Code-1.6 "用 bash 工具执行 echo hello，然后贴出输出"
 ```
 
 ### Paseo
@@ -159,16 +158,16 @@ opencode run --model joycode/GLM-5.3 "用 bash 工具执行 echo hello，然后�
 
 ```json
 {
-  "id": "agent_profile_joycode_glm53",
-  "name": "GLM-5.3 · JoyCode",
+  "id": "agent_profile_joycode_joyai",
+  "name": "JoyAI-Code-1.6 · JoyCode",
   "provider": "opencode",
-  "model": "joycode/GLM-5.3",
+  "model": "joycode/JoyAI-Code-1.6",
   "modeId": "build",
   "featureValues": { "auto_accept": true }
 }
 ```
 
-之后 `paseo run --provider opencode --model joycode/GLM-5.3` 就能用；Paseo 的 MCP 会自动把它暴露给上层 agent。
+之后 `paseo run --provider opencode --model joycode/JoyAI-Code-1.6` 就能用；Paseo 的 MCP 会自动把它暴露给上层 agent。
 
 ### 跨机部署（一台 Mac 跑客户端，另一台机器用 Paseo 调）
 
@@ -209,22 +208,28 @@ opencode run --model joycode/GLM-5.3 "用 bash 工具执行 echo hello，然后�
 | `JOYCODE_SHIM_AUTOSTART` | `1` | 端口不通时是否自动拉起 JoyCode.app；`0` 关闭 |
 | `JOYCODE_SHIM_LAUNCH_WAIT_MS` | `60000` | 拉起后等新端口的超时 |
 | `JOYCODE_SHIM_LAUNCH_COOLDOWN_MS` | `30000` | 两次拉起的冷却，防崩溃循环 |
+| `JOYCODE_SHIM_DISABLED_MODELS` | `GLM-5.3` | 逗号分隔、大小写不敏感；命中的模型从 `/v1/models` 隐藏且请求返 `400 model_disabled`。设空串恢复全部 |
 
 ## 模型目录
 
-| slug（上游） | display（可传入） | 上下文 | 备注 |
-| --- | --- | --- | --- |
-| `JoyAI-Code-1.6` | `JoyAI-Code-1.6` | 200K | 首轮偶发空文本，重试即可 |
-| `GLM-5.3-agent` | `GLM-5.3` | 200K | 支持 `reasoning`（high/max） |
-| `Kimi-K2.6-agent` | `Kimi-K2.6` | 200K | 视觉 |
-| `MiniMax-M3-agent` | `MiniMax-M3` | 200K | 视觉；输出带 `<think>` 前缀 |
-| `Doubao-Seed-2.0-pro-agent` | `Doubao-Seed-2.0-pro` | 200K | 视觉 |
+| slug（上游） | display（可传入） | 上下文 | 计费 | 备注 |
+| --- | --- | --- | --- | --- |
+| `JoyAI-Code-1.6` | `JoyAI-Code-1.6` | 200K | **0x（免费）** | 首轮偶发空文本，重试即可 |
+| `Kimi-K2.6-agent` | `Kimi-K2.6` | 200K | 0.5x | 视觉 |
+| `MiniMax-M3-agent` | `MiniMax-M3` | 200K | 0.4x | 视觉；输出带 `<think>` 前缀 |
+| `Doubao-Seed-2.0-pro-agent` | `Doubao-Seed-2.0-pro` | 200K | 0.4x | 视觉 |
+| `GLM-5.3-agent` | `GLM-5.3` | 200K | 0.6x | **默认禁用**（见下） |
+
+**怎么确认哪档免费（配额耗尽判别法）**：读积分计数器的「请求前后差值」不可信 —— 它有异步结算延迟，几秒后才跳变，还会跨到下一次测量里。改用不受延迟干扰的判据：**当配额已经耗尽（`remain <= 0`）时，还能出 token 的就是不扣积分的**。2026-11-16 在 `remain=-20` 下实测：`JoyAI-Code-1.6` 连跑 3 次全部正常出 token 且积分 Δ=0，其余四个全部 `insufficient_quota`。积分可通过直连签名接口 `functionId=get_newpoint_ide` 读取（见 `docs/METHOD.md`）。
+
+**`GLM-5.3` 默认禁用**：它是四个付费档里最贵的一档（0.6x），本仓库默认把它挡在外面 —— `JOYCODE_SHIM_DISABLED_MODELS` 默认值就是 `GLM-5.3`，命中的模型既不出现在 `/v1/models`，直接请求也返 `400 model_disabled`。要放开就把它从环境变量里去掉（或设空串）。
 
 ## 已知限制
 
 - **JoyCode.app 会自行退出**，端口随之消失。shim 收到请求时若发现端口不通，会懒启动把它拉起来再重试（`JOYCODE_SHIM_AUTOSTART=0` 可关掉）。不是轮询，只在请求到来时动作。
 - **依赖 token 自动续期**。`ptKey` 由 JoyCode.app 自己刷新（`~/.joycode/auth.json` 的 `last_refresh`）。token 过期后重启客户端即可。
 - **MiniMax-M3 输出带 `<think>` 前缀**，需要下游自己剥。
+- **套餐积分会耗尽**。除 `JoyAI-Code-1.6` 外的模型都扣月积分；耗尽后它们一律返 `insufficient_quota`，而 1.6 仍可用（见上面「配额耗尽判别法」）。
 - **不保证长期有效**。这是利用客户端自身通道，厂商随时可能改协议或收紧策略。协议变了先看 `~/.joycode/logs/joycode-app.log` 的 `[pro-daemon]` 行。
 
 ## 排障
@@ -237,6 +242,8 @@ opencode run --model joycode/GLM-5.3 "用 bash 工具执行 echo hello，然后�
 | `401 账号未登录` | 请求没带 `ptKey` 头，或 token 过期 |
 | `AI_GRAY_ACCESS_DENIED` | 走了 `/responses` 且 `stream: false` |
 | `请求模型不在当前 JoyCode 模型目录中` | 模型名不是 slug，且不带 `-agent` |
+| `400 model_disabled` | 该模型在 `JOYCODE_SHIM_DISABLED_MODELS` 里（默认 `GLM-5.3`） |
+| `insufficient_quota` | 套餐积分耗尽；只有 `JoyAI-Code-1.6` 不受影响 |
 
 ## 法律与边界
 

@@ -229,6 +229,22 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/<label>.plist
 
 固定下来的凭据不再被客户端续期（客户端只维护当前登录账号）。这是有意的取舍：**用「不会自动续期」换「不会被别人换号打断」**。过期后重新登录该账号并重做快照即可。
 
+### 步骤十的陷阱：pin 之后要记得解 pin
+
+`JOYCODE_AUTH_FILE` 指向快照文件后，常驻服务用的是**快照里的账号**，不是客户端当前登录的账号。「用户在客户端里换了号、客户端自己能用」和「服务能用」是两件事。
+
+2026-11-18 实例：用户在 JoyCode.app 里重新登录了 `zhanghong1991217`，客户端一切正常，但下游一直报 `HTTP 406 账号未登录` —— 因为服务还 pin 在两天前的 `mcdowell1991` 旧快照上，那个 token 早过期了。排查方向一开始全错了（查端口、查代理、查积分、查租户准入），直到做了一次「同一份 token 绕过 shim 直连上游」的对照才定位。
+
+判据：
+
+| 直连上游 | 经 shim | 结论 |
+| --- | --- | --- |
+| 出 token | 被拒 | **身份不一致** —— 解 pin，别查别的 |
+| 被拒 | 被拒 | 账号/权限问题，与 shim 无关 |
+| 出 token | 出 token | 正常 |
+
+解 pin 就是删掉 plist 里的 `JOYCODE_AUTH_FILE` 再 bootout + bootstrap。判断服务到底在用哪份凭据，看启动日志那一行 `[shim] credential: <路径> (pinned)` 或 `(live JoyCode.app login)` —— 这是唯一直接证据，`launchctl list` 看不出来。
+
 ## 判断标准：什么时候该放弃
 
 - 客户端本身也报权限错 → 放弃，这是账号问题

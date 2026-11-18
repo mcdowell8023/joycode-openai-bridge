@@ -249,6 +249,32 @@ tail -3 <log dir>/shim.out.log   # 应见 [shim] credential: … (pinned)
 
 代价：固定文件里的 `refresh_token` 不再被 JoyCode.app 续期（app 只维护当前登录账号），过期后必须重新从该账号登录并重做快照。
 
+### ⚠️ pin 是个陷阱：换号后必须解 pin
+
+pin 之后 shim 用的是**快照文件**，不是 JoyCode.app 当前登录的账号。所以「用户在客户端里换了号、客户端自己能用」和「shim 能用」是两件事 —— 2026-11-18 就栽在这里：用户在 JoyCode.app 里重新登录了 `zhanghong1991217`，客户端一切正常，但下游一直报 `HTTP 406 账号未登录`，因为 shim 还 pin 在 11-16 的 `mcdowell1991` 旧快照上，那个 token 早过期了。
+
+**先分清是「链路坏了」还是「身份不对」，一条命令即可**：
+
+```bash
+# 同一份 token，绕过 shim 直连上游（不经代理，不经 shim）
+# 出 token  ⇒ 账号没问题，是 shim 用的身份不对 → 解 pin
+# 被拒      ⇒ 账号/权限问题，跟 shim 无关
+```
+
+实测形态：**经 shim 全红、直连全绿 ⇒ 一定是身份不一致**，不要在端口、日志、代理上浪费时间。
+
+解 pin（让 shim 跟随 JoyCode.app 当前登录）：
+
+```bash
+/usr/libexec/PlistBuddy -c "Delete :EnvironmentVariables:JOYCODE_AUTH_FILE" \
+  ~/Library/LaunchAgents/<label>.plist
+launchctl bootout  gui/$(id -u)/<label>
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/<label>.plist
+tail -3 <log dir>/shim.out.log   # 应见 [shim] credential: ~/.joycode/auth.json (live JoyCode.app login)
+```
+
+注意日志里的 `(pinned)` / `(live JoyCode.app login)` 后缀 —— 这是判断 shim 到底在用哪份凭据的唯一直接证据。`kickstart -k` 不重读 plist，必须 bootout + bootstrap。
+
 ## 模型目录
 
 | slug（上游） | display（可传入） | 上下文 | 计费 | 备注 |

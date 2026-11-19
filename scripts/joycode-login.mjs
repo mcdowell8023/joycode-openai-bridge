@@ -230,7 +230,7 @@ async function status() {
     console.log(`tenant      : ${cred?.tenant || "(empty)"}`);
     console.log(`login_type  : ${cred?.login_type || cred?.loginType || "?"}`);
     console.log(`token mint  : ${mint}`);
-    console.log(`token sha12 : ${createHash("sha256").update(token).digest("hex").slice(0, 12)}`);
+    console.log(`token sha12 : ${bearer ? createHash("sha256").update(bearer).digest("hex").slice(0, 12) : "(empty)"}`);
     console.log(`last_refresh: ${cred?.last_refresh || "?"}`);
   } catch (e) {
     console.log(e.code === "ENOENT" ? `no credential at ${AUTH_FILE}` : `cannot read ${AUTH_FILE}: ${e.message}`);

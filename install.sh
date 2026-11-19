@@ -3,7 +3,7 @@
 #
 # Usage:
 #   ./install.sh                 # install both agents (JoyCode.app autostart + shim)
-#   ./install.sh --shim-only     # only the shim (if JoyCode.app starts some other way)
+#   ./install.sh --with-app      # also autostart JoyCode.app (v2 setups only; app optional since v3)
 #   ./install.sh --uninstall     # unload and remove both agents
 #
 # Env overrides:
@@ -26,6 +26,7 @@ APP_PLIST="$LAUNCHD_DIR/$APP_LABEL.plist"
 MODE="install"
 case "${1:-}" in
   --shim-only) MODE="shim-only" ;;
+  --with-app)  MODE="with-app" ;;   # v2 only: also autostart JoyCode.app (app is optional since v3)
   --uninstall) MODE="uninstall" ;;
   "") ;;
   *) echo "unknown option: $1" >&2; exit 64 ;;
@@ -79,12 +80,12 @@ launchctl bootout "gui/$(id -u)/$SHIM_LABEL" 2>/dev/null || true
 launchctl bootstrap "gui/$(id -u)" "$SHIM_PLIST"
 echo "loaded $SHIM_LABEL on port $PORT"
 
-if [[ "$MODE" == "install" ]]; then
+if [[ "$MODE" == "with-app" ]]; then
   render "$ROOT/launchd/app.plist.template" "$APP_PLIST" "$APP_LABEL"
   plutil -lint "$APP_PLIST" >/dev/null
   launchctl bootout "gui/$(id -u)/$APP_LABEL" 2>/dev/null || true
   launchctl bootstrap "gui/$(id -u)" "$APP_PLIST"
-  echo "loaded $APP_LABEL (JoyCode.app autostart)"
+  echo "loaded $APP_LABEL (JoyCode.app autostart — v2 setups only)"
 fi
 
 echo

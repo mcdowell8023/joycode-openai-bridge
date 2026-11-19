@@ -245,6 +245,18 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/<label>.plist
 
 解 pin 就是删掉 plist 里的 `JOYCODE_AUTH_FILE` 再 bootout + bootstrap。判断服务到底在用哪份凭据，看启动日志那一行 `[shim] credential: <路径> (pinned)` 或 `(live JoyCode.app login)` —— 这是唯一直接证据，`launchctl list` 看不出来。
 
+## 步骤十一：终极形态——绕开客户端，直连官方网关（2026-11-19）
+
+前面十步都在「借客户端的通道」。走到极致会发现另一个问题：**客户端本身成了单点**——它退出、换号、崩溃，链路就断（2026-11-16/18 两次事故都是这个形态）。这一步的判据：当你已经摸清了签名算法（步骤三的副产品）和登录回调协议，就可以问一句「还借它干嘛」。
+
+JoyCode 的答案：可以完全去掉客户端。
+
+1. **签名直连**。`POST https://api-ai.jd.com/api?appid=joycode_ide&functionId=chat_completions&t=<ms>&sign=<hmac>`，头 `ptKey`/`tenant`/`loginType`/`X-JoyCode-Caller: IDE`。签名 = `{appid,functionId,t}` 按 key 排序 `values.filter(Boolean).join("&")` → HMAC-SHA256。**实测与客户端代理输出同构**（流式 SSE delta、非流式纯 JSON），shim 只是把「读日志找随机端口」换成「固定网关 URL + 签名」。
+2. **登录也能自实现**。官方登录 = bootstrap 接口拿 `loginUrl` → 浏览器登录 → 回调 `http://127.0.0.1:<authPort>/?pt_key=…&authKey=…`。三个要点：`authKey` 是本地生成的 48hex 随机数（校验靠它）；`jcid` = `sha256("joycoder-ide:jcid:v1:<platform>:<source>:<machine-id>")[:32]`；写盘结构 `tokens.access_token === tokens.refresh_token`（同一枚），`id_token` 是 alg=none 的占位 JWT。`scripts/joycode-login.mjs` 复刻了整条链路并实测成功。
+3. **卸载客户端后的验证面**：shim `/health` 变 `mode:"direct-upstream"`（v2 是 `cli-proxy`）——`mode` 字段就是架构版本的直接证据；非流式/流式/tools/禁用四项探针照旧全绿才算完。
+
+代价与边界：签名 key 是反解的私有常量，厂商换协议即失效（这条从步骤三起就没变过）；客户端卸载后**没有进程替你续期 token**，失效就得跑一次 `joycode-login.mjs`。换来的是：没有随机端口、没有懒启动、没有「退出即断链」，跨机部署只剩一份凭据文件。
+
 ## 判断标准：什么时候该放弃
 
 - 客户端本身也报权限错 → 放弃，这是账号问题
@@ -264,4 +276,4 @@ JoyCode 这次三条都没踩到，所以成了。
 
 ## 附：JoyCode 的具体实现
 
-见本仓库根目录 `README.md` 和 `scripts/joycode-openai-shim.mjs`。那 400 多行代码就是上面十步的落地：端口发现、token 读取、鉴权翻译、流式透传、懒启动、模型禁用、凭据固定。
+见本仓库根目录 `README.md` 和 `scripts/joycode-openai-shim.mjs`。那 470 多行代码就是上面十一步的落地：签名直连、无 app 登录、token 读取、鉴权翻译、流式透传、模型禁用——v2 时代的端口发现与懒启动已随直连架构移除。

@@ -241,6 +241,25 @@ async function handleChat(req, res) {
   // (keep upstream stream flag aligned with the downstream request: the direct
   //  gateway honours it — stream:true → SSE deltas, stream:false → plain JSON)
 
+  // Client compat normalisation (2026-11-19, from piCodingAgent end-to-end tests):
+  // 1. `developer` role: pi sends its system prompt as role:"developer" (OpenAI chat
+  //    spec). MiniMax accepts it, but Kimi-K2.6 and Doubao-Seed-2.0-pro reject it with
+  //    `Invalid request: role 'developer' is not allowed`. Rewrite to "system".
+  if (Array.isArray(upstreamBody.messages)) {
+    upstreamBody.messages = upstreamBody.messages.map((m) =>
+      m && m.role === "developer" ? { ...m, role: "system" } : m,
+    );
+  }
+  // 2. reasoning_effort + thinking: pi always sends reasoning_effort:"high" (its
+  //    thinkingLevel). Doubao rejects `high` with "Invalid combination of
+  //    reasoning_effort and thinking type: high + disabled" — its upstream only
+  //    accepts "high" TOGETHER with thinking enabled, which we cannot force, so drop
+  //    the field for Doubao entirely (model falls back to its default reasoning).
+  //    Kimi tolerates "high", MiniMax too.
+  if (modelSlug === "Doubao-Seed-2.0-pro-agent" && upstreamBody.reasoning_effort) {
+    delete upstreamBody.reasoning_effort;
+  }
+
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
   // Propagate downstream disconnects so we do not keep streaming into a dead socket.
